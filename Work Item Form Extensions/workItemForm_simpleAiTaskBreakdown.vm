@@ -1,0 +1,252 @@
+###############################################################################
+## Title: AI GPT Task Breakdown
+## Author: PolarionDude
+## Date: 31.12.2024
+## Version: 0.1
+## Description: This extension uses AI to support the user in breaking down user stories into sub-tasks
+##
+###############################################################################
+## Known-Issues:
+##  - Too many for production readyness
+#######################
+## Main
+#######################
+## Configuration and Context Variables
+#set($taskWorkItemType = "task")
+#set($workItemId = $object.getId())
+#set($workItemTitle = $object.getTitle())
+#set($workItemDescription = $object.getDescription().getContent().replaceAll("text/html: ",""))
+#set($projectId = $object.getProjectId())
+
+## Get current Work Item as Rendering API Object
+#set($renderingWorkItem = $transaction.workItems().getBy().oldApiObject($object))
+
+#set($linkedWorkItemsQuery = "SQL:(select WORKITEM.C_URI from WORKITEM inner join PROJECT on PROJECT.C_URI = WORKITEM.FK_URI_PROJECT inner join STRUCT_WORKITEM_LINKEDWORKITEMS as SWL on WORKITEM.C_URI = SWL.FK_URI_P_WORKITEM inner join WORKITEM as WORKITEM2 on WORKITEM2.C_URI = SWL.FK_WORKITEM where PROJECT.C_ID = '$projectId' AND WORKITEM.C_TYPE = '$taskWorkItemType' AND WORKITEM2.C_ID = '$workItemId')")
+#set($linkedTasks = $trackerService.queryWorkItems($linkedWorkItemsQuery, "created"))
+
+<table id="subTaskTable" class="polarion-rpw-table-content">
+	<tr class="polarion-rpw-table-header-row">
+		<th style="min-width: 50px;">ID</th>
+		<th>Title</th>
+        <th>Description</th>
+		<th style="min-width: 70px;">Status</th>
+    <th>Action</th>
+	</tr>
+#foreach($linkedWorkItem in $linkedTasks)
+  	<tr class="polarion-rpw-table-content-row">
+		<td style="min-width: 50px;">$!linkedWorkItem.getId()</td>
+		<td>$!linkedWorkItem.getTitle()</td>
+    	<td>$transaction.workItems().getBy().oldApiObject($linkedWorkItem).fields().description().render().htmlFor().forFrame()</td>
+		<td style="min-width: 70px;">$!linkedWorkItem.getStatus().getName()</td>
+    	<td>Already Existing</td>
+	</tr>
+#end
+</table>
+<br>
+<button class="ui button hicontrast small" onclick="generateSubTasks()">Generate User Stories via AI</button>
+
+
+<script>
+var openAiApiKey = "[YOUR_OPENAI_KEY]"
+var contextWorkItemId = "$workItemId";
+var projectId = "$projectId";
+var gptModelUserStoryBreakdown = 'gpt-4o'; //Other models: gpt-3.5-turbo
+// GPT API request
+var userStory = "$workItemTitle" + " - " + "$workItemDescription";
+var formatUserStoryBreakdown = `The format of the answer should be in JSON syntax structured like this. Don't add an additional extra opening brace anywhere that could crash the syntax:
+{
+  "tasks": [
+    {
+      "title": "Example Task Title",
+      "description": "Example Description"
+    },
+    {
+      "title": "Example Task Title",
+      "description": "Example Description"
+    },
+    {
+      "title": "Example Task Title",
+      "description": "Example Description"
+    }
+  ]
+}`;
+var configurationUserStoryBreakdown = 'You are an assistant for a requirements engineer and project manager. Please break down the following user story into sub tasks that have to be done by the developer and project team.' + formatUserStoryBreakdown; 
+var baseUrl = window.location.origin;
+
+async function generateSubTasks(){
+	var clickedButton = event.target;
+	clickedButton.disabled = true;
+	clickedButton.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Loading...';
+	var gptTaskBreakdownResponse = await gptRequestUserStoryBreakdown();
+	let tasksData = JSON.parse(gptTaskBreakdownResponse);
+      let tasks = tasksData.tasks;
+      tasks.forEach(taskItem => {
+        const { title, description } = taskItem;
+        addTableRow('-', title, description, '-');
+  });
+  clickedButton.innerHTML = 'Tasks were generated';
+  clickedButton.classList.add('ui-disabled');
+}
+
+async function gptRequestUserStoryBreakdown(){
+  const requestOptions = {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${openAiApiKey}`
+    },
+    body: JSON.stringify({
+    "model": gptModelUserStoryBreakdown,
+    "messages": [{"role": "system", "content": configurationUserStoryBreakdown}, {"role": "user", "content": userStory}]
+    })
+  };
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', requestOptions);
+
+    if (response.ok) {
+		const responseBody = await response.json();
+		console.log("API call successfull:", responseBody.choices[0].message.content);
+		var gptResponse = responseBody.choices[0].message.content.replace(/```json|```/g, '');
+		return gptResponse;
+    } else {
+      console.log("API call failed:", response);
+      return null;
+    }
+  } catch (error) {
+    console.error("Error during API call:", error);
+    return null;
+  }
+}
+
+// This function adds a new row to the "subTaskTable"
+function addTableRow(column1Data, column2Data, column3Data, column4Data) {
+  let table = document.getElementById("subTaskTable");
+  const newRow = table.insertRow();
+  
+  const column1 = newRow.insertCell();
+  column1.textContent = column1Data;
+  
+  const column2 = newRow.insertCell();
+  column2.textContent = column2Data;
+  
+  const column3 = newRow.insertCell();
+  column3.textContent = column3Data;
+
+  const column4 = newRow.insertCell();
+  column4.textContent = column4Data;
+
+  const column5 = newRow.insertCell();
+
+  // Create a button element
+  var button = document.createElement("button");
+  button.innerHTML = "Create Work Item";
+  button.setAttribute('data-title', column2Data);
+  button.setAttribute('data-description', column3Data);
+  button.classList.add('ui', 'button', 'hicontrast', 'small');
+  
+  // Add a click event listener to the button
+  button.addEventListener("click", function(){createWorkItem()});
+
+  // Add the button to the last cell in the new row
+  column5.appendChild(button);
+}
+
+async function createWorkItem(){
+  let clickedButton = event.target;
+  clickedButton.disabled = true;
+  clickedButton.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Loading...';
+  let createWorkItemTitle = clickedButton.getAttribute("data-title");
+  let createWorkItemDescription = clickedButton.getAttribute("data-description");
+  const url = baseUrl + '/polarion/rest/v1/projects/' + projectId + '/workitems';
+  const requestBody = {
+      data: [
+      {
+        type: 'workitems',
+        attributes: {
+          type: 'task',
+          description: {
+            type: 'text/html', 
+            value: createWorkItemDescription
+          },
+          title: createWorkItemTitle
+        }       
+      }
+    ]
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { 
+        'X-Polarion-REST-Token': window.getRestApiToken(),
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (response.ok) {
+      const responseBody = await response.json();
+      console.log("Task created successfully:", responseBody);
+      clickedButton.innerHTML = "Task created successfully";
+      linkWorkItem(responseBody.data[0].id.split("/")[1]);
+    } else {
+      console.log("Failed to create task:", response.status);
+    }
+  } catch (error) {
+    console.error("Error creating task:", error);
+  } 
+}
+
+async function linkWorkItem(sourceWorkItemId){
+  const urlLinkWorkItems = baseUrl + '/polarion/rest/v1/projects/' + projectId + '/workitems/' + sourceWorkItemId + '/linkedworkitems';
+  const requestBody = {
+    data: [
+      {
+        type: 'linkedworkitems',
+        attributes: {
+          role: 'relates_to'
+        },
+        relationships: {
+          workItem: {
+            data: {
+              type: "workitems",
+              id: projectId + '/' + contextWorkItemId
+            }
+          } 
+        }             
+      }
+    ]
+  };
+console.log(requestBody + urlLinkWorkItems);
+  
+  try {
+    const response = await fetch(urlLinkWorkItems, {
+      method: "POST",
+      headers: { 
+        'X-Polarion-REST-Token': window.getRestApiToken(),
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (response.ok) {
+      const responseBody = await response.json();
+      console.log("Link created successfully:", responseBody);
+    } else {
+      console.log("Failed to create link:", response.status);
+    }
+  } catch (error) {
+    console.error("Error creating link:", error);
+  }
+}
+
+function updateUserStoryVars() {
+    // Set or reset the JS variables with the new content
+    window.userStory = "$workItemTitle" + " - " + "$workItemDescription";;
+}
+updateUserStoryVars();
+
+</script>
